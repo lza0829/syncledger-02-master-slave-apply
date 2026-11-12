@@ -4,13 +4,13 @@ import json
 from datetime import datetime, timezone
 from typing import Any
 
-from app.config import FIXTURES_DIR
+from app.config import fixtures_dir
 from app.db import connect
 from app.engines.reconcile import compare_sides
 from app.repositories import batches as batch_repo
 from app.repositories import contracts as contract_repo
+from app.repositories import dispositions as disp_repo
 from app.repositories import pairs as pair_repo
-from app.repositories import tickets as ticket_repo
 
 
 def _now() -> str:
@@ -18,7 +18,7 @@ def _now() -> str:
 
 
 def _load_fixture(name: str) -> list[dict[str, Any]]:
-    path = FIXTURES_DIR / name
+    path = fixtures_dir() / name
     with path.open(encoding="utf-8") as f:
         data = json.load(f)
     if not isinstance(data, list):
@@ -29,6 +29,7 @@ def _load_fixture(name: str) -> list[dict[str, Any]]:
 def dashboard_stats() -> dict[str, Any]:
     conn = connect()
     try:
+        last_run = disp_repo.latest_run(conn)
         return {
             "pair_count": conn.execute("SELECT COUNT(*) c FROM reconcile_pairs").fetchone()["c"],
             "enabled_pairs": conn.execute(
@@ -36,9 +37,17 @@ def dashboard_stats() -> dict[str, Any]:
             ).fetchone()["c"],
             "batch_count": conn.execute("SELECT COUNT(*) c FROM reconcile_batches").fetchone()["c"],
             "diff_count": conn.execute("SELECT COUNT(*) c FROM reconcile_diffs").fetchone()["c"],
-            "open_dispositions": conn.execute(
-                "SELECT COUNT(*) c FROM diff_tickets WHERE status='open'"
-            ).fetchone()["c"],
+            "disposition_runs": disp_repo.count_runs(conn),
+            "last_disposition": (
+                {
+                    "run_no": last_run["run_no"],
+                    "status": last_run["status"],
+                    "policy": last_run["policy"],
+                    "remaining_mismatch": last_run["remaining_mismatch"],
+                }
+                if last_run
+                else None
+            ),
             "policy": conn.execute(
                 "SELECT value FROM settings WHERE key='default_policy'"
             ).fetchone()["value"],
@@ -77,13 +86,26 @@ def list_diffs(batch_id: int | None = None, pair_id: int | None = None) -> list[
         conn.close()
 
 
-def list_dispositions() -> list[dict[str, Any]]:
-    """Difference disposition records (not a customer-service ticket desk)."""
+def get_pair_sides(pair_id: int) -> dict[str, Any]:
+    """Current side storage for a pair, read straight from the working
+    fixtures — this is the data dispositions overwrite, shown raw."""
     conn = connect()
     try:
-        return ticket_repo.list_tickets(conn)
+        pair = pair_repo.get_pair(conn, pair_id)
+        if not pair:
+            raise ValueError("pair not found")
     finally:
         conn.close()
+    return {
+        "pair_id": pair["id"],
+        "pair_code": pair["code"],
+        "left_name": pair["left_name"],
+        "right_name": pair["right_name"],
+        "left_fixture": pair["left_fixture"],
+        "right_fixture": pair["right_fixture"],
+        "left_rows": _load_fixture(pair["left_fixture"]),
+        "right_rows": _load_fixture(pair["right_fixture"]),
+    }
 
 
 def list_contracts() -> list[dict[str, Any]]:
@@ -101,6 +123,28 @@ def list_settings() -> dict[str, str]:
         return {r["key"]: r["value"] for r in rows}
     finally:
         conn.close()
+
+
+def update_setting(key: str, value: str) -> dict[str, str]:
+    """Update a settings key. Only the disposition default policy is editable;
+    it must be one of the three mutually exclusive policies."""
+    from app.engines import disposition as disp
+
+    if key != "default_policy":
+        raise ValueError(f"设置项 {key!r} 只读；可改项：default_policy")
+    if value not in disp.POLICIES:
+        raise ValueError(f"default_policy 只能是 {'/'.join(disp.POLICIES)} 之一")
+    conn = connect()
+    try:
+        conn.execute(
+            "INSERT INTO settings(key, value) VALUES (?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            (key, value),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return list_settings()
 
 
 def run_reconcile(pair_id: int, note: str | None = None) -> dict[str, Any]:

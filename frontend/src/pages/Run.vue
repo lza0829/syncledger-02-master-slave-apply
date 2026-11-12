@@ -72,6 +72,8 @@ onMounted(async () => {
       <p style="margin-top:0.75rem">
         <router-link :to="{ path: '/diffs', query: { batch_id: last.id } }">查看本批差异 →</router-link>
         ·
+        <router-link :to="{ path: '/dispositions', query: { batch_id: last.id } }">去处置本批差异 →</router-link>
+        ·
         <router-link :to="{ path: '/audit', query: { batch_id: last.id } }">审计摘要 →</router-link>
       </p>
     </div>

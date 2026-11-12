@@ -25,8 +25,11 @@ watch(() => route.query.batch_id, async () => {
   <div class="page">
     <h1>差异清单</h1>
     <p class="muted">
-      对齐后的差异行。底座只记账；主从盖写、忽略规则、严重级别闸留给后题。
-      <span v-if="route.query.batch_id">当前过滤批次 #{{ route.query.batch_id }}</span>
+      对齐后的差异行。处置（主从盖写 / 只记账）在差异处置页执行并留痕。
+      <span v-if="route.query.batch_id">
+        当前过滤批次 #{{ route.query.batch_id }}
+        · <router-link :to="{ path: '/dispositions', query: { batch_id: route.query.batch_id } }">去处置本批 →</router-link>
+      </span>
     </p>
     <p v-if="err" class="tag danger">{{ err }}</p>
     <div class="panel">

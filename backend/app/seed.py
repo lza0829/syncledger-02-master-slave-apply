@@ -1,8 +1,35 @@
 from __future__ import annotations
 
 import json
+import shutil
 
+from app.config import fixtures_dir, seed_fixtures_dir
 from app.db import connect
+
+
+def ensure_fixtures() -> None:
+    """Materialize working side fixtures from the bundled seeds on first boot.
+
+    Working fixtures live next to the DB (DATA_DIR/fixtures) so disposition
+    overwrites and the disposition ledger share one durability story.
+    """
+    dest = fixtures_dir()
+    dest.mkdir(parents=True, exist_ok=True)
+    for seed_file in seed_fixtures_dir().glob("*.json"):
+        target = dest / seed_file.name
+        if not target.exists():
+            shutil.copyfile(seed_file, target)
+
+
+def reset_fixtures() -> list[str]:
+    """Restore every working fixture to its pristine seed. Returns file names."""
+    dest = fixtures_dir()
+    dest.mkdir(parents=True, exist_ok=True)
+    restored = []
+    for seed_file in sorted(seed_fixtures_dir().glob("*.json")):
+        shutil.copyfile(seed_file, dest / seed_file.name)
+        restored.append(seed_file.name)
+    return restored
 
 
 PAIR_SEEDS = [
@@ -128,8 +155,45 @@ def init_db() -> None:
                 key TEXT PRIMARY KEY,
                 value TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS disposition_runs(
+                id INTEGER PRIMARY KEY,
+                run_no TEXT NOT NULL UNIQUE,
+                batch_id INTEGER NOT NULL,
+                pair_id INTEGER NOT NULL,
+                policy TEXT NOT NULL,
+                failure_strategy TEXT NOT NULL,
+                status TEXT NOT NULL,
+                target_side TEXT,
+                examined INTEGER NOT NULL DEFAULT 0,
+                applied INTEGER NOT NULL DEFAULT 0,
+                failed INTEGER NOT NULL DEFAULT 0,
+                skipped INTEGER NOT NULL DEFAULT 0,
+                recorded INTEGER NOT NULL DEFAULT 0,
+                fields_overwritten INTEGER NOT NULL DEFAULT 0,
+                remaining_mismatch INTEGER NOT NULL DEFAULT 0,
+                note TEXT,
+                error TEXT,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY(batch_id) REFERENCES reconcile_batches(id),
+                FOREIGN KEY(pair_id) REFERENCES reconcile_pairs(id)
+            );
+            CREATE TABLE IF NOT EXISTS disposition_entries(
+                id INTEGER PRIMARY KEY,
+                run_id INTEGER NOT NULL,
+                diff_id INTEGER,
+                align_key_json TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                action TEXT NOT NULL,
+                target_side TEXT,
+                fields_json TEXT NOT NULL,
+                reason TEXT,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY(run_id) REFERENCES disposition_runs(id),
+                FOREIGN KEY(diff_id) REFERENCES reconcile_diffs(id)
+            );
             """
         )
+        ensure_fixtures()
         if conn.execute("SELECT COUNT(*) c FROM reconcile_pairs").fetchone()["c"] == 0:
             from datetime import datetime, timezone
 
